@@ -1,4 +1,4 @@
-// finder-app/writer.c
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,10 +6,10 @@
 #include <syslog.h>
 
 int main(int argc, char *argv[]) {
-    // Open syslog with facility LOG_USER and tag "writer"
+    // Opening syslog with facility LOG_USER and tag "writer"
     openlog("writer", LOG_PID, LOG_USER);
 
-    // Expect exactly two arguments: <file> <string>
+    // Expecting two arguments: <file> <string>
     if (argc != 3) {
         syslog(LOG_ERR, "Usage: %s <file> <string>", argv[0]);
         closelog();
@@ -19,10 +19,10 @@ int main(int argc, char *argv[]) {
     const char *filepath = argv[1];
     const char *text     = argv[2];
 
-    // Required debug log
+    // Debug log
     syslog(LOG_DEBUG, "Writing %s to %s", text, filepath);
 
-    // DO NOT create directories; assume caller created them
+    //NOT create directories; assume caller created them
     FILE *fp = fopen(filepath, "w");
     if (!fp) {
         // %m expands to strerror(errno)
