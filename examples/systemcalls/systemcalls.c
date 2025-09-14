@@ -1,5 +1,12 @@
 #include "systemcalls.h"
 
+#include <stdlib.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <syslog.h>
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -17,7 +24,33 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+   openlog("systemcalls.c", LOG_CONS | LOG_PID | LOG_PERROR, LOG_USER);
+
+    if (cmd == NULL) {
+        syslog(LOG_ERR, "do_system: command is NULL, nothing to run");
+        closelog();
+        return false;
+    }
+ 
+    int rc = system(cmd);
+    if (rc == -1) {
+        syslog(LOG_ERR, "do_system: system() failed to start command, errno=%d (%m)", errno);
+        closelog();
+        return false;
+    }
+
+   if (WIFEXITED(rc) && (WEXITSTATUS(rc) == 0))
+    {
+        syslog(LOG_DEBUG,"do_system: command '%s' ran successfully with exit=0", cmd);
+        closelog();
+        return true;
+    }
+    else
+    {
+        syslog(LOG_ERR,"do_system: command '%s' did not exit normally (status=0x%x)", cmd, rc);
+        closelog();
+        return false;
+    }
 }
 
 /**
@@ -36,18 +69,7 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
-    va_list args;
-    va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
-    {
-        command[i] = va_arg(args, char *);
-    }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+
 
 /*
  * TODO:
@@ -58,10 +80,53 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+ 
+    openlog("systemcalls.c", LOG_CONS | LOG_PID | LOG_PERROR, LOG_USER);
+
+    va_list args;
+    va_start(args, count);
+
+    char *command[count + 1];
+    for (int i = 0; i < count; i++) {
+        command[i] = va_arg(args, char *);
+    }
+    command[count] = NULL;
+   
+    fflush(NULL);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        va_end(args);
+        syslog(LOG_ERR, "do_exec: fork() failed, errno=%d (%m)", errno);
+        closelog();
+        return false;
+    }
+
+    if (pid == 0) {
+        execv(command[0], command);
+        syslog(LOG_ERR, "do_exec: execv('%s', ...) failed, errno=%d (%m)", command[0], errno);
+        _exit(127);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        va_end(args);
+        syslog(LOG_ERR, "do_exec: waitpid() failed, errno=%d (%m)", errno);
+        closelog();
+        return false;
+    }
 
     va_end(args);
 
-    return true;
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        syslog(LOG_DEBUG, "do_exec: child '%s' exited normally with status=0", command[0]);
+        closelog();
+        return true;
+    } else {
+        syslog(LOG_ERR, "do_exec: child '%s' exited abnormally (status=0x%x)", command[0], status);
+        closelog();
+        return false;
+    }
 }
 
 /**
@@ -69,20 +134,9 @@ bool do_exec(int count, ...)
 *   This file will be closed at completion of the function call.
 * All other parameters, see do_exec above
 */
+
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
-    va_list args;
-    va_start(args, count);
-    char * command[count+1];
-    int i;
-    for(i=0; i<count; i++)
-    {
-        command[i] = va_arg(args, char *);
-    }
-    command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 
 /*
@@ -93,7 +147,73 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
+openlog("systemcalls.c", LOG_CONS | LOG_PID | LOG_PERROR, LOG_USER);
+
+    if (outputfile == NULL || count < 1) {
+        syslog(LOG_ERR, "do_exec_redirect: bad args\n");
+        closelog();
+        return false;
+    }
+
+    va_list args;
+    va_start(args, count);
+
+     char *command[count + 1];
+    for (int i = 0; i < count; i++) {
+        command[i] = va_arg(args, char *);
+    }
+    command[count] = NULL;
+
+    int fd = open(outputfile, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (fd < 0) {
+        va_end(args);
+        syslog(LOG_ERR, "do_exec_redirect: open('%s') failed with errno=%d\n", outputfile, errno);
+        closelog();
+        return false;
+    }
+
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0) {
+        va_end(args);
+        syslog(LOG_ERR, "do_exec_redirect: fork failed with errno=%d\n", errno);
+        close(fd);
+        closelog();
+        return false;
+    }
+
+    if (pid == 0) {
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            syslog(LOG_ERR, "do_exec_redirect: dup2 failed with errno=%d\n", errno);
+            close(fd);
+            _exit(126);
+        }
+        close(fd);
+        execv(command[0], command);
+        syslog(LOG_ERR, "do_exec_redirect: execv failed with errno=%d\n", errno);
+        _exit(127);
+    }
+
+    close(fd);
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        va_end(args);
+        syslog(LOG_ERR, "do_exec_redirect: waitpid() failed, errno=%d (%m)", errno);
+        closelog();
+        return false;
+    }
+
     va_end(args);
 
-    return true;
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        syslog(LOG_DEBUG, "do_exec_redirect: child '%s' exited normally with status=0", command[0]);
+        closelog();
+        return true;
+    }else{
+        syslog(LOG_ERR, "do_exec_redirect: child '%s' exited abnormally (status=0x%x)", command[0], status);
+        closelog();
+        return false;
+    }
+    
 }
