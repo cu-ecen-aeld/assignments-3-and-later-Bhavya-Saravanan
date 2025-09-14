@@ -9,7 +9,7 @@ OUTDIR=/tmp/aeld
 KERNEL_REPO=git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
 KERNEL_VERSION=v5.15.163
 BUSYBOX_VERSION=1_33_1
-FINDER_APP_DIR=/home/bhavya/assignment-1-Bhavya-Saravanan/finder-app
+FINDER_APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 
