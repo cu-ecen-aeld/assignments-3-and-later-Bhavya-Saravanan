@@ -116,6 +116,8 @@ cp ${FINDER_APP_DIR}/writer ${OUTDIR}/rootfs/home/
 cp ${FINDER_APP_DIR}/writer.c ${OUTDIR}/rootfs/home/
 cp ${FINDER_APP_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home/
 cp -rL ${FINDER_APP_DIR}/conf ${OUTDIR}/rootfs/home/
+mkdir -p "${OUTDIR}/rootfs/etc/finder-app/conf"
+cp -a "${OUTDIR}/rootfs/home/conf/"* "${OUTDIR}/rootfs/etc/finder-app/conf/"
 
 # TODO: Chown the root directory
 cd ${OUTDIR}/rootfs
