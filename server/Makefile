@@ -1,18 +1,21 @@
-# server/Makefile  (same style, just outputs aesdsocket)
-COMPILER ?= $(CROSS_COMPILE)gcc
+# Cross-compile friendly Makefile
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -Wall -Wextra -Werror -O2
+LDFLAGS ?= -pthread -lrt
 
-BUILD_FLAGS ?= -g -Wall -Werror
-LINK_FLAGS  ?= -pthread -lrt
+TARGET ?= aesdsocket
+SRC := aesdsocket.c
+OBJ := $(SRC:.c=.o)
 
-default: aesdsocket
-all: aesdsocket
+all: $(TARGET)
 
-aesdsocket.o: aesdsocket.c
-	$(COMPILER) $(BUILD_FLAGS) -c $^ -o $@
+$(TARGET): $(OBJ)
+	$(CC) $(OBJ) -o $@ $(LDFLAGS)
 
-aesdsocket: aesdsocket.o
-	$(COMPILER) $(BUILD_FLAGS) $^ -o $@ $(LINK_FLAGS)
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	-rm -f *.o aesdsocket
+	rm -f $(OBJ) $(TARGET)
+.PHONY: all clean
 
