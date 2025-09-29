@@ -1,8 +1,5 @@
 CC ?= $(CROSS_COMPILE)gcc
-
-#Target executable aesdsocket utility
 TARGET?=aesdsocket
-
 OBJS = $(SRC:.c=.o)
 SRC  = aesdsocket.c
 CFLAGS ?= -Werror -Wall -Wunused -Wunused-variable -Wextra
@@ -12,7 +9,6 @@ all:$(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -o $(TARGET) $(OBJS) 
-#$(CC) $(CFLAGS) $^-o $@ $(INCLUDES) $(LDFLAGS)
 
 %.o: %.c
 	$(CC) -c $< -o $@
