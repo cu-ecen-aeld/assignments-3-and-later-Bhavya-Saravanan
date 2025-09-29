@@ -1,21 +1,20 @@
-# Cross-compile friendly Makefile
 CC ?= $(CROSS_COMPILE)gcc
-CFLAGS ?= -Wall -Wextra -Werror -O2
-LDFLAGS ?= -pthread -lrt
 
-TARGET ?= aesdsocket
-SRC := aesdsocket.c
-OBJ := $(SRC:.c=.o)
+#Target executable aesdsocket utility
+TARGET?=aesdsocket
 
-all: $(TARGET)
+OBJS = $(SRC:.c=.o)
+SRC  = aesdsocket.c
+CFLAGS ?= -Werror -Wall -Wunused -Wunused-variable -Wextra
+LDFLAGS ?= -lpthread -lrt
 
-$(TARGET): $(OBJ)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+all:$(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -o $(TARGET) $(OBJS) 
+#$(CC) $(CFLAGS) $^-o $@ $(INCLUDES) $(LDFLAGS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-clean:
-	rm -f $(OBJ) $(TARGET)
-.PHONY: all clean
-
+	$(CC) -c $< -o $@
+clean: 
+	rm -f $(OBJS) $(TARGET)
