@@ -22,7 +22,16 @@
 
 /* ========================== Config ========================== */
 #define SERVICE_PORT "9000" 
-#define DATA_FILE    "/var/tmp/aesdsocketdata"
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1  // default ON
+#endif
+
+#if USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/dev/aesdchar"
+#else
+#define DATA_FILE "/var/tmp/aesdsocketdata"
+#endif
 
 /* ========================== Global state ========================== */
 static volatile sig_atomic_t g_shutdown_requested = 0; //flag set when signals are called
@@ -131,6 +140,7 @@ static int daemonize_self(void)
 }
 
 /* ================= Timestamp thread: appends every 10 seconds ================= */
+#if !USE_AESD_CHAR_DEVICE
 static void *timestamp_worker(void *arg)
 {
     (void)arg;
@@ -177,8 +187,8 @@ static void *timestamp_worker(void *arg)
     }
     return NULL;
 }
- 
-/* ========================== Client worker (thread) ========================== */
+#endif
+
 static void *client_worker(void *arg)
 {
     struct thread_node *node = (struct thread_node *)arg;
@@ -187,7 +197,7 @@ static void *client_worker(void *arg)
 
     LOGI("Handling connection from %s", client_ip ? client_ip : "unknown");
 
-    int data_append_fd = open(DATA_FILE, O_CREAT | O_WRONLY, 0644);
+    int data_append_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
     if (data_append_fd < 0) {
         LOGE("open(%s for append) failed: %s", DATA_FILE, strerror(errno));
         goto out;
@@ -245,23 +255,12 @@ static void *client_worker(void *arg)
 
             pthread_mutex_lock(&g_file_mutex);
 
-            if (lseek(data_append_fd, 0, SEEK_END) == -1) {
-            
-                pthread_mutex_unlock(&g_file_mutex);
-                LOGE("lseek(append) failed: %s", strerror(errno));
-                goto out;
-            }
             if (write_all(data_append_fd, pending + scan_start, pkt_len) < 0) {
                 pthread_mutex_unlock(&g_file_mutex);
                 LOGE("write(%s) failed: %s", DATA_FILE, strerror(errno));
                 goto out;
             }
-            if (fsync(data_append_fd) != 0) {
-                pthread_mutex_unlock(&g_file_mutex);
-                LOGE("fsync(%s) failed: %s", DATA_FILE, strerror(errno));
-                goto out;
-            }
-            
+           
             LOGI("Appended %zu bytes to %s", pkt_len, DATA_FILE);
 
             /* Send the entire file back */
@@ -326,6 +325,8 @@ out:
     return NULL;
 }
 
+
+
 /* ========================== Main ========================== */
 int main(int argc, char *argv[])
 {
@@ -335,6 +336,11 @@ int main(int argc, char *argv[])
 
     openlog("aesdsocket", LOG_PID, LOG_USER);
     LOGI("Program start");
+   #if USE_AESD_CHAR_DEVICE
+      LOGI("MODE: char device, endpoint");
+   #else
+      LOGI("MODE: file-backed, path");
+   #endif
 
     /* Install signal handlers */
     struct sigaction sa;
@@ -355,7 +361,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     LOGI("Installed SIGTERM handler");
-
+#if !USE_AESD_CHAR_DEVICE
     /* Just to ensure the data file exists */
     int touch_fd = open(DATA_FILE, O_CREAT | O_WRONLY, 0644);
     
@@ -369,7 +375,7 @@ int main(int argc, char *argv[])
     close(touch_fd);
     
     LOGI("Ensured %s exists (or created)", DATA_FILE);
-
+#endif
     /* Resolve addresses to bind on port 9000 */
     struct addrinfo hints, *results = NULL, *ai = NULL;
     
@@ -440,6 +446,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
     LOGI("Listening on TCP port %s", SERVICE_PORT);
+#if !USE_AESD_CHAR_DEVICE
 
     /* timestamp thread  */
     
@@ -451,6 +458,7 @@ int main(int argc, char *argv[])
     
         LOGE("timestamp pthread_create failed: %s", strerror(ts_rc));
     }
+#endif
 
     /* ========================== Accept loop (multi-client) ========================== */
     while (!g_shutdown_requested) {
@@ -496,6 +504,7 @@ int main(int argc, char *argv[])
                 node->ctx.client_fd = client_fd;
                 node->done = false;
                 
+
                   //creating thread for each client connection
 
                 int rc = pthread_create(&node->tid, NULL, client_worker, node);
@@ -558,7 +567,7 @@ int main(int argc, char *argv[])
         cur = next;
     }
     SLIST_INIT(&g_threads);
-
+#if !USE_AESD_CHAR_DEVICE
     /* Join the timestamp thread last */
     if (ts_rc == 0) 
       pthread_join(ts_tid, NULL);
@@ -572,7 +581,7 @@ int main(int argc, char *argv[])
     } else {
         LOGI("Removed %s", DATA_FILE);
     }
-
+#endif
     /* Final exit reason to know if any signal occured */
 
     if (g_last_signal == SIGINT)  
@@ -585,4 +594,3 @@ int main(int argc, char *argv[])
     closelog();
     return EXIT_SUCCESS;
 }
-
