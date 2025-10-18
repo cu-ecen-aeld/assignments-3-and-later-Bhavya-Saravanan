@@ -1,13 +1,21 @@
-#! bin/sh
+#!/bin/sh
+
+MODDIR="/lib/modules/$(uname -r)/extra"
 
 case "$1" in 
     start)
-        aesdchar_load
+        
+     ( cd "$MODDIR" && /usr/bin/aesdchar_load)
+    
         ;;
+
     stop)
-       aesdchar_unload
+       
+     ( cd "$MODDIR" && /usr/bin/aesdchar_unload)
         ;;
+
         *)
+
       echo "Usage: $0 {start|stop}"
     exit 1
 esac 
