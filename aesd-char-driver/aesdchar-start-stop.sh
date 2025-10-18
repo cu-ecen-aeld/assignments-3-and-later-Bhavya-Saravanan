@@ -1,23 +1,19 @@
-#!/bin/sh
+#! /bin/sh
 
-MODDIR="/lib/modules/$(uname -r)/extra"
-
-case "$1" in 
+case "$1" in
     start)
-        
-     ( cd "$MODDIR" && /usr/bin/aesdchar_load)
-    
-        ;;
 
+        echo "Loading AESD char driver..."
+        /lib/modules/$(uname -r)/extra/aesdchar_load
+
+    ;;
     stop)
-       
-     ( cd "$MODDIR" && /usr/bin/aesdchar_unload)
-        ;;
 
-        *)
+        echo "Unloading AESD char driver..."
+        /lib/modules/$(uname -r)/extra/aesdchar_unload
 
-      echo "Usage: $0 {start|stop}"
-    exit 1
-esac 
-
-exit 0
+    ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+esac
