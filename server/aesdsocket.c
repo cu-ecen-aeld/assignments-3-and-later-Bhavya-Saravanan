@@ -15,7 +15,7 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <fcntl.h>
-
+#include "../aesd-char-driver/aesd_ioctl.h" 
 #include <pthread.h>
 #include <sys/queue.h>
 #include <time.h>
@@ -189,6 +189,36 @@ static void *timestamp_worker(void *arg)
 }
 #endif
 
+
+static bool parse_seekto(const char *s, size_t len, unsigned *x, unsigned *y)
+{
+    
+    static const char *prefix = "AESDCHAR_IOCSEEKTO:";
+    size_t pfx = strlen(prefix);
+    if (len < pfx || strncmp(s, prefix, pfx) != 0) 
+       return false;
+
+    // format: AESDCHAR_IOCSEEKTO:X,Y[\n]
+    const char *p = s + pfx;
+    char *end1 = NULL, *end2 = NULL;
+
+    errno = 0;
+    unsigned long vx = strtoul(p, &end1, 10);
+    if (errno || end1 == p || *end1 != ',') return false;
+
+    p = end1 + 1;
+    errno = 0;
+    unsigned long vy = strtoul(p, &end2, 10);
+    if (errno || end2 == p) return false;
+
+    // trailing '\n'
+    if (!(end2 == s + len || (end2 + 1 == s + len && *end2 == '\n'))) return false;
+
+    *x = (unsigned)vx;
+    *y = (unsigned)vy;
+    return true;
+}
+
 static void *client_worker(void *arg)
 {
     struct thread_node *node = (struct thread_node *)arg;
@@ -197,12 +227,13 @@ static void *client_worker(void *arg)
 
     LOGI("Handling connection from %s", client_ip ? client_ip : "unknown");
 
-    int data_append_fd = open(DATA_FILE, O_CREAT | O_WRONLY | O_APPEND, 0644);
-    if (data_append_fd < 0) {
-        LOGE("open(%s for append) failed: %s", DATA_FILE, strerror(errno));
-        goto out;
-    }
-    LOGI("Opened %s for append", DATA_FILE);
+  
+     int data_fd = open(DATA_FILE, O_CREAT | O_RDWR | O_APPEND, 0644);
+     if (data_fd < 0) {
+       LOGE("open(%s O_RDWR|O_APPEND) failed: %s", DATA_FILE, strerror(errno));
+       goto out;
+     }
+    LOGI("Opened %s for read/write", DATA_FILE);
 
     char *pending = NULL;
     size_t pending_cap = 0;
@@ -253,61 +284,93 @@ static void *client_worker(void *arg)
             size_t pkt_end = (size_t)(nl - pending) + 1;
             size_t pkt_len = pkt_end - scan_start;
 
-            pthread_mutex_lock(&g_file_mutex);
 
-            if (write_all(data_append_fd, pending + scan_start, pkt_len) < 0) {
-                pthread_mutex_unlock(&g_file_mutex);
-                LOGE("write(%s) failed: %s", DATA_FILE, strerror(errno));
-                goto out;
-            }
-           
-            LOGI("Appended %zu bytes to %s", pkt_len, DATA_FILE);
+           char *pkt = pending + scan_start;
 
-            /* Send the entire file back */
-            int data_read_fd = open(DATA_FILE, O_RDONLY);
-            if (data_read_fd < 0) {
-                pthread_mutex_unlock(&g_file_mutex);
-                LOGE("open(%s for read) failed: %s", DATA_FILE, strerror(errno));
-                goto out;
-            }
+           pthread_mutex_lock(&g_file_mutex);
 
-            ssize_t total_sent = 0;
-            for (;;) {
-                char outbuf[1024];
-                ssize_t rn = read(data_read_fd, outbuf, sizeof(outbuf));
-                if (rn < 0) {
-                    if (errno == EINTR) 
-                       continue;
-                    LOGE("read(%s) failed: %s", DATA_FILE, strerror(errno));
-                    close(data_read_fd);
-                    pthread_mutex_unlock(&g_file_mutex);
-                    goto out;
-                }
-                if (rn == 0) 
-                   break;
+           unsigned x = 0, y = 0;
+           bool is_seekto = parse_seekto(pkt, pkt_len, &x, &y);  
 
-                if (write_all(client_fd, outbuf, (size_t)rn) < 0) {
-                    LOGE("send to client failed: %s", strerror(errno));
-                    close(data_read_fd);
-                    pthread_mutex_unlock(&g_file_mutex);
-                    goto out;
-                }
-                
-                
-                total_sent += rn;
-            }
-            
-            
-            close(data_read_fd);
-            
+           if (is_seekto) {
+
+           struct aesd_seekto st = { .write_cmd = x, .write_cmd_offset = y };
+
+           if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &st) == -1) {
+              pthread_mutex_unlock(&g_file_mutex);
+              LOGE("ioctl(AESDCHAR_IOCSEEKTO) failed: %s", strerror(errno));
+              goto out;
+           }
+
+          // Read from SAME fd at current f_pos (set by ioctl) and send to client
+ 
+          ssize_t total_sent = 0;
+         for (;;) {
+           char outbuf[1024];
+           ssize_t rn = read(data_fd, outbuf, sizeof(outbuf));
+           if (rn < 0) {
+            if (errno == EINTR) 
+              continue;
+            LOGE("read(%s after ioctl) failed: %s", DATA_FILE, strerror(errno));
             pthread_mutex_unlock(&g_file_mutex);
-            
-            LOGI("Sent %zd bytes of %s to client %s", total_sent, DATA_FILE, client_ip ? client_ip : "unknown");
-
-            scan_start = pkt_end;
+            goto out;
         }
+        if (rn == 0)
+           break;  // EOF from current position
+        if (write_all(client_fd, outbuf, (size_t)rn) < 0) {
+            LOGE("send to client failed: %s", strerror(errno));
+            pthread_mutex_unlock(&g_file_mutex);
+            goto out;
+        }
+        total_sent += rn;
+    }
+    LOGI("Sent %zd bytes after SEEKTO %u,%u", total_sent, x, y);
 
-        /* Compact any partial line left over */
+} else {
+
+    // Regular behavior: write packet, then send full content
+    
+    if (write_all(data_fd, pkt, pkt_len) < 0) {
+        pthread_mutex_unlock(&g_file_mutex);
+        LOGE("write(%s) failed: %s", DATA_FILE, strerror(errno));
+        goto out;
+    }
+    LOGI("Appended %zu bytes to %s", pkt_len, DATA_FILE);
+
+    // Rewind to start for the "full content" echo behavior
+    if (lseek(data_fd, 0, SEEK_SET) == (off_t)-1) {
+        pthread_mutex_unlock(&g_file_mutex);
+        LOGE("lseek(SET 0) failed: %s", strerror(errno));
+        goto out;
+    }
+
+    ssize_t total_sent = 0;
+    for (;;) {
+        char outbuf[1024];
+        ssize_t rn = read(data_fd, outbuf, sizeof(outbuf));
+        if (rn < 0) {
+            if (errno == EINTR) 
+              continue;
+            LOGE("read(%s) failed: %s", DATA_FILE, strerror(errno));
+            pthread_mutex_unlock(&g_file_mutex);
+            goto out;
+        }
+        if (rn == 0)
+           break;
+        if (write_all(client_fd, outbuf, (size_t)rn) < 0) {
+            LOGE("send to client failed: %s", strerror(errno));
+            pthread_mutex_unlock(&g_file_mutex);
+            goto out;
+        }
+        total_sent += rn;
+    }
+    LOGI("Sent %zd bytes of %s to client %s", total_sent, DATA_FILE, client_ip ? client_ip : "unknown");
+}
+
+   pthread_mutex_unlock(&g_file_mutex);
+   scan_start = pkt_end;
+
+        /* Any partial line left over */
         if (scan_start > 0) {
             size_t remain = pending_len - scan_start;
             memmove(pending, pending + scan_start, remain);
@@ -316,8 +379,8 @@ static void *client_worker(void *arg)
     }
 
 out:
-    if (data_append_fd >= 0) 
-      close(data_append_fd);
+    if (data_fd >= 0) 
+      close(data_fd);
     free(pending);
     LOGI("Finished connection with %s", client_ip ? client_ip : "unknown");
     
@@ -326,7 +389,7 @@ out:
 }
 
 
-
+}
 /* ========================== Main ========================== */
 int main(int argc, char *argv[])
 {
