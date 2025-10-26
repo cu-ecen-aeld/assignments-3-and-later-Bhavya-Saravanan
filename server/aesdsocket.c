@@ -204,12 +204,14 @@ static bool parse_seekto(const char *s, size_t len, unsigned *x, unsigned *y)
 
     errno = 0;
     unsigned long vx = strtoul(p, &end1, 10);
-    if (errno || end1 == p || *end1 != ',') return false;
+    if (errno || end1 == p || *end1 != ',') 
+       return false;
 
     p = end1 + 1;
     errno = 0;
     unsigned long vy = strtoul(p, &end2, 10);
-    if (errno || end2 == p) return false;
+    if (errno || end2 == p) 
+       return false;
 
     // trailing '\n'
     if (!(end2 == s + len || (end2 + 1 == s + len && *end2 == '\n'))) return false;
