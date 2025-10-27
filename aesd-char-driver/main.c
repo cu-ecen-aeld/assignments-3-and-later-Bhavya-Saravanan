@@ -289,14 +289,13 @@ static int aesd_get_absolute_position(const struct aesd_circular_buffer *circ_bu
 
     valid_entries = circ_buf->full
         ? AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED
-        : ((circ_buf->in_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED
-           - circ_buf->out_offs) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED);
+        : ((circ_buf->in_offs - circ_buf->out_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+           % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED);
 
     if (cmd_index >= valid_entries)
         return -EINVAL;
 
     for (unsigned int i = 0; i < valid_entries; i++) {
-
         buffer_index = (circ_buf->out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
         entry = &circ_buf->entry[buffer_index];
 
@@ -306,16 +305,16 @@ static int aesd_get_absolute_position(const struct aesd_circular_buffer *circ_bu
         if (i == cmd_index) {
             if (byte_offset >= entry->size)
                 return -EINVAL;
-
             *absolute_pos = accumulated_size + byte_offset;
             return 0;
         }
 
-        accumulated_size += entry->size;
+        accumulated_size += entry->size;  // sum sizes of commands before target
     }
 
     return -EINVAL;
 }
+
 
 /**
  * @brief Handle ioctl commands for AESD character device
