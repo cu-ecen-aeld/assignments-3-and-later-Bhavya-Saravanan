@@ -332,12 +332,13 @@ static void *client_worker(void *arg)
     pthread_mutex_unlock(&g_file_mutex);
 
     
-// drop the processed packet from 'pending' before continuing
-size_t remain = pending_len - pkt_end;
-if (remain) memmove(pending, pending + pkt_end, remain);
-pending_len = remain;
+    // drop the processed packet from 'pending' before continuing
+   size_t remain = pending_len - pkt_end;
+   if (remain) 
+     memmove(pending, pending + pkt_end, remain);
+   pending_len = remain;
 
-scan_start = 0;   // we compacted; next scan starts at 0
+   scan_start = 0;  
     continue;   
 }else {
 
