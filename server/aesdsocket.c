@@ -294,31 +294,28 @@ static void *client_worker(void *arg)
            unsigned x = 0, y = 0;
            bool is_seekto = parse_seekto(pkt, pkt_len, &x, &y);  
 
-           if (is_seekto) {
+      if (is_seekto) {
+       struct aesd_seekto st = { .write_cmd = x, .write_cmd_offset = y };
 
-           struct aesd_seekto st = { .write_cmd = x, .write_cmd_offset = y };
+      if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &st) == -1) {
+        pthread_mutex_unlock(&g_file_mutex);
+        LOGE("ioctl(AESDCHAR_IOCSEEKTO) failed: %s", strerror(errno));
+        goto out;
+      }
 
-           if (ioctl(data_fd, AESDCHAR_IOCSEEKTO, &st) == -1) {
-              pthread_mutex_unlock(&g_file_mutex);
-              LOGE("ioctl(AESDCHAR_IOCSEEKTO) failed: %s", strerror(errno));
-              goto out;
-           }
-
-          // Read from SAME fd at current f_pos (set by ioctl) and send to client
- 
-          ssize_t total_sent = 0;
-         for (;;) {
-           char outbuf[1024];
-           ssize_t rn = read(data_fd, outbuf, sizeof(outbuf));
-           if (rn < 0) {
+      ssize_t total_sent = 0;
+      for (;;) {
+        char outbuf[1024];
+        ssize_t rn = read(data_fd, outbuf, sizeof(outbuf));
+        if (rn < 0) {
             if (errno == EINTR) 
               continue;
             LOGE("read(%s after ioctl) failed: %s", DATA_FILE, strerror(errno));
             pthread_mutex_unlock(&g_file_mutex);
             goto out;
         }
-        if (rn == 0)
-           break;  // EOF from current position
+        if (rn == 0) 
+          break;
         if (write_all(client_fd, outbuf, (size_t)rn) < 0) {
             LOGE("send to client failed: %s", strerror(errno));
             pthread_mutex_unlock(&g_file_mutex);
@@ -326,9 +323,14 @@ static void *client_worker(void *arg)
         }
         total_sent += rn;
     }
+
     LOGI("Sent %zd bytes after SEEKTO %u,%u", total_sent, x, y);
 
-} else {
+    pthread_mutex_unlock(&g_file_mutex);
+
+    scan_start = pkt_end;
+    continue;   
+}else {
 
     // Regular behavior: write packet, then send full content
     
