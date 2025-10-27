@@ -213,8 +213,11 @@ static bool parse_seekto(const char *s, size_t len, unsigned *x, unsigned *y)
     if (errno || end2 == p) 
        return false;
 
-    // trailing '\n'
-    if (!(end2 == s + len || (end2 + 1 == s + len && *end2 == '\n'))) return false;
+    
+   const char *tail = end2;
+   if (tail < s + len && *tail == '\r') tail++;
+   if (tail < s + len && *tail == '\n') tail++;
+   if (tail != s + len) return false;
 
     *x = (unsigned)vx;
     *y = (unsigned)vy;
@@ -328,7 +331,13 @@ static void *client_worker(void *arg)
 
     pthread_mutex_unlock(&g_file_mutex);
 
-    scan_start = pkt_end;
+    
+// drop the processed packet from 'pending' before continuing
+size_t remain = pending_len - pkt_end;
+if (remain) memmove(pending, pending + pkt_end, remain);
+pending_len = remain;
+
+scan_start = 0;   // we compacted; next scan starts at 0
     continue;   
 }else {
 
