@@ -10,6 +10,8 @@
  * @copyright Copyright (c) 2019
  *
  */
+ 
+#include "aesd_ioctl.h"  // shared header for AESDCHAR_IOCSEEKTO
 #include <linux/slab.h>      
 #include <linux/uaccess.h>   
 #include <linux/string.h>  
@@ -220,18 +222,152 @@ ssize_t aesd_write(struct file *filp, const char __user *ubuf, size_t count, lof
         /* Loop in case multiple '\n' exist in the now-updated incomplete_cmd */
     }
 
+   
+
   out_unlock_free:
+    if (retval > 0)                 // only advance when we actually wrote bytes
+        *f_pos += retval;           // keep positional I/O consistent with llseek
     mutex_unlock(&dev->lock);
     kfree(kbuf);
     return retval;
 }
+
+static loff_t aesd_buffer_size_bytes(const struct aesd_circular_buffer *buf)
+{
+    loff_t total = 0;
+    uint8_t idx;
+    struct aesd_buffer_entry *entry;
+
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, buf, idx) {
+        if (entry && entry->buffptr) 
+          total += entry->size;
+    }
+    return total;
+}
+/* ---------- llseek implementation---------- */
+static loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+    loff_t res, size;
+    struct aesd_dev *dev = filp->private_data;
+
+    if (!dev) 
+       return -EINVAL;
+
+   
+    if (mutex_lock_interruptible(&dev->lock))
+        return -ERESTARTSYS;
+
+    size = aesd_buffer_size_bytes(&dev->cmd_history); 
+
+   
+    res = fixed_size_llseek(filp, offset, whence, size);
+
+    mutex_unlock(&dev->lock);
+    return res;   /* returns new position */
+}
+
+
+/**
+ * @brief Calculate absolute byte offset for a given write command and offset
+ *
+ * @param circ_buf   Pointer to the AESD circular buffer
+ * @param cmd_index  Command number to seek into (0-based)
+ * @param byte_offset Byte offset inside that command
+ * @param absolute_pos Pointer to store computed absolute position
+ *
+ * @return 0 on success, -EINVAL on invalid index or offset
+ */
+static int aesd_get_absolute_position(const struct aesd_circular_buffer *circ_buf,
+                                      uint32_t cmd_index,
+                                      uint32_t byte_offset,
+                                      loff_t *absolute_pos)
+{
+    loff_t accumulated_size = 0;
+    unsigned int valid_entries;
+    uint8_t buffer_index;
+    const struct aesd_buffer_entry *entry;
+
+    valid_entries = circ_buf->full
+        ? AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED
+        : ((circ_buf->in_offs - circ_buf->out_offs + AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+           % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED);
+
+    if (cmd_index >= valid_entries)
+        return -EINVAL;
+
+    for (unsigned int i = 0; i < valid_entries; i++) {
+        buffer_index = (circ_buf->out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        entry = &circ_buf->entry[buffer_index];
+
+        if (!entry->buffptr || entry->size == 0)
+            return -EINVAL;
+
+        if (i == cmd_index) {
+            if (byte_offset >= entry->size)
+                return -EINVAL;
+            *absolute_pos = accumulated_size + byte_offset;
+            return 0;
+        }
+
+        accumulated_size += entry->size;  // sum sizes of commands before target
+    }
+
+    return -EINVAL;
+}
+
+
+/**
+ * @brief Handle ioctl commands for AESD character device
+ *
+ * Supports AESDCHAR_IOCSEEKTO to reposition file offset to a specific
+ * command and offset within the circular buffer.
+ */
+static long aesd_handle_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_dev *device;
+    struct aesd_seekto seek_params;
+    loff_t new_file_position = 0;
+    int result;
+
+    // Validate ioctl command magic and range
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC || _IOC_NR(cmd) > AESDCHAR_IOC_MAXNR)
+        return -ENOTTY;
+
+    if (cmd != AESDCHAR_IOCSEEKTO)
+        return -ENOTTY;
+
+    if (copy_from_user(&seek_params, (const void __user *)arg, sizeof(seek_params)))
+        return -EFAULT;
+
+    device = filp->private_data;
+    if (!device)
+        return -EINVAL;
+
+    if (mutex_lock_interruptible(&device->lock))
+        return -ERESTARTSYS;
+
+    result = aesd_get_absolute_position(&device->cmd_history,
+                                        seek_params.write_cmd,
+                                        seek_params.write_cmd_offset,
+                                        &new_file_position);
+
+    if (result == 0)
+        filp->f_pos = new_file_position;
+
+    mutex_unlock(&device->lock);
+    return result;
+}
+
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
-    .llseek  = default_llseek,
+    .llseek         = aesd_llseek, 
+    .unlocked_ioctl = aesd_handle_ioctl, 
+   
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
